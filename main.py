@@ -4,33 +4,31 @@ import logging
 import re
 import random
 import threading
-import subprocess
 import html
-from datetime import datetime
 from flask import Flask
 from telebot import TeleBot, types
 from telebot.types import MessageEntity
 
+# ═══════════════════════════════════════
+# ⚙️ SETTINGS
+# ═══════════════════════════════════════
 BOT_TOKEN = "9133828158:AAGQu6otGk5TzAyk4Hz3EGdKsOdj2l5oXc8"
 ADMIN_IDS = [8498419947, 6862525056]
 
 DATA_FILE = os.path.join(os.getcwd(), "data.json")
-WELCOME_DIR = os.path.join(os.getcwd(), "welcome_files")
-os.makedirs(WELCOME_DIR, exist_ok=True)
 
+# 💎 ONLY 10 CUSTOM EMOJIS (as requested)
 PREMIUM_EMOJI_MAP = {
     "✅": ["6113743365826677162"],
-    "📢": ["5931641120458018914"],
-    "🧠": ["6271505894089952985"],
     "🔥": ["6332589971240655050"],
-    "📥": ["6330021121236145815"],
     "💎": ["6204123844400124499"],
     "📌": ["6068848489293422081"],
     "👑": ["5816539591812845173"],
     "🚀": ["6332241232781121574"],
     "🌹": ["6278173680493137560"],
     "💬": ["6240160909231135849"],
-    "🔗": ["6116012762121377264"],
+    "📥": ["6330021121236145815"],
+    "📢": ["5931641120458018914"],
 }
 
 COLOR_MAP = {"blue": "primary", "green": "success", "red": "danger"}
@@ -43,19 +41,24 @@ DEFAULT_CAPTIONS = {
     "audio": "✅ Audio File ✅"
 }
 
-DEFAULT_OWNER_BTN_TEXT = "💬 DM Owner"
-
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 bot = TeleBot(BOT_TOKEN, threaded=True)
 
+# ═══════════════════════════════════════
+# 🗄️ DATA STRUCTURE
+# ═══════════════════════════════════════
 DEFAULT_DATA = {
     "welcome_contents": [],
     "users": [],
     "stats": {"approved": 0, "channels": {}},
     "pinned_content": None,
-    "join_enabled": True
+    "join_enabled": True,
+    # NEW GLOBAL OWNER SETTINGS
+    "owner_username": "", 
+    "owner_draft_msg": "Hello I am joined your channel",
+    "owner_btn_text": "💬 Message Owner"
 }
 
 def load_data():
@@ -102,6 +105,9 @@ save_data(data)
 
 user_states = {}
 
+# ═══════════════════════════════════════
+# 🛠️ HELPERS
+# ═══════════════════════════════════════
 def is_admin(uid):
     return uid in ADMIN_IDS
 
@@ -141,49 +147,6 @@ def colored_btn(text, url=None, callback=None, color="primary", icon_emoji_id=No
         return types.InlineKeyboardButton(text, url=url, style=color, icon_custom_emoji_id=icon_emoji_id)
     return types.InlineKeyboardButton(text, callback_data=callback, style=color, icon_custom_emoji_id=icon_emoji_id)
 
-def build_keyboard_with_rows(buttons_list):
-    mrk = types.InlineKeyboardMarkup(row_width=2)
-    buttons_by_row = {}
-    for b in buttons_list:
-        row = b.get("row", 0)
-        if row not in buttons_by_row:
-            buttons_by_row[row] = []
-        icon_id = b.get("icon_emoji_id", None)
-        buttons_by_row[row].append(colored_btn(b['text'], url=b["url"], color=b.get("color", "primary"), icon_emoji_id=icon_id))
-    for row_num in sorted(buttons_by_row.keys()):
-        row_buttons = buttons_by_row[row_num]
-        if len(row_buttons) == 1:
-            mrk.add(row_buttons[0])
-        else:
-            mrk.add(*row_buttons)
-    return mrk
-
-def build_full_keyboard(item):
-    """Combines normal buttons + owner link button into one keyboard."""
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    buttons_by_row = {}
-    for b in item.get("buttons", []) or []:
-        row = b.get("row", 0)
-        buttons_by_row.setdefault(row, []).append(b)
-
-    for row_num in sorted(buttons_by_row.keys()):
-        row_btns = [
-            colored_btn(b['text'], url=b["url"], color=b.get("color", "primary"), icon_emoji_id=b.get("icon_emoji_id"))
-            for b in buttons_by_row[row_num]
-        ]
-        if len(row_btns) == 1:
-            markup.add(row_btns[0])
-        else:
-            markup.add(*row_btns)
-
-    owner_link = item.get("owner_link")
-    if owner_link:
-        btn_text = item.get("owner_btn_text") or DEFAULT_OWNER_BTN_TEXT
-        clean_text, icon_id = extract_button_icon(btn_text)
-        markup.add(colored_btn(clean_text, url=owner_link, color="success", icon_emoji_id=icon_id))
-
-    return markup if (item.get("buttons") or owner_link) else None
-
 def send(chat_id, text, reply_markup=None, **kwargs):
     if isinstance(text, str):
         clean_txt, emoji_entities = convert_premium_emojis(text)
@@ -208,6 +171,48 @@ def send_media_with_caption(func, chat_id, file_id, caption="", reply_markup=Non
         return func(chat_id, file_id, caption=clean_cap, reply_markup=reply_markup, **kwargs)
     return func(chat_id, file_id, reply_markup=reply_markup, **kwargs)
 
+# ═══════════════════════════════════════
+# ⌨️ KEYBOARD BUILDER
+# ═══════════════════════════════════════
+def build_full_keyboard(item):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    buttons_by_row = {}
+    for b in item.get("buttons", []) or []:
+        row = b.get("row", 0)
+        buttons_by_row.setdefault(row, []).append(b)
+
+    for row_num in sorted(buttons_by_row.keys()):
+        row_btns = [
+            colored_btn(b['text'], url=b["url"], color=b.get("color", "primary"), icon_emoji_id=b.get("icon_emoji_id"))
+            for b in buttons_by_row[row_num]
+        ]
+        if len(row_btns) == 1:
+            markup.add(row_btns[0])
+        else:
+            markup.add(*row_btns)
+
+    # 🌟 GLOBAL OWNER LINK BUTTON (AUTO ADDED TO ALL CONTENTS)
+    owner_user = data.get("owner_username", "").replace("@", "").strip()
+    if owner_user:
+        # Format link to pre-fill draft message
+        import urllib.parse
+        draft_msg = data.get("owner_draft_msg", "Hello I am joined your channel")
+        encoded_msg = urllib.parse.quote(draft_msg)
+        owner_link = f"https://t.me/{owner_user}?text={encoded_msg}"
+        
+        btn_text = data.get("owner_btn_text", "💬 Message Owner")
+        clean_text, icon_id = extract_button_icon(btn_text)
+        
+        # Add as last row
+        markup.add(colored_btn(clean_text, url=owner_link, color="success", icon_emoji_id=icon_id))
+
+    if markup.keyboard:
+        return markup
+    return None
+
+# ═══════════════════════════════════════
+# 📤 SENDING LOGIC
+# ═══════════════════════════════════════
 def _send_single_item(chat_id, item, user_name, channel_name, markup):
     safe_name = html.escape(user_name) if user_name else "User"
     safe_channel = html.escape(channel_name) if channel_name else "Channel"
@@ -276,6 +281,9 @@ def send_welcome_contents(chat_id, user_name="User", channel_name="Channel"):
             logger.error(f"Welcome: {e}")
     return sent
 
+# ═══════════════════════════════════════
+# 🌐 HANDLERS
+# ═══════════════════════════════════════
 @bot.chat_join_request_handler()
 def handle_join(update: types.ChatJoinRequest):
     user = update.from_user
@@ -303,7 +311,7 @@ def handle_join(update: types.ChatJoinRequest):
 
         sent = send_welcome_contents(uid, name, channel)
         if not sent:
-            send(uid, "")
+            send(uid, "Welcome!")
     except Exception as e:
         logger.error(f"Join: {e}")
 
@@ -316,6 +324,7 @@ def start(message: types.Message):
 
     if is_admin(user.id):
         join_status = "🟢 ON" if data.get("join_enabled", True) else "🔴 OFF"
+        owner_status = data.get('owner_username') or "Not Set"
         text = f"""╔══════════════════════╗
 ║  🏆 <b>ALL-IN-ONE BOT</b>  ║
 ╚══════════════════════╝
@@ -323,9 +332,9 @@ def start(message: types.Message):
 📋 /welcome | /stats | /pin | /help
 
 📥 <b>Join Accept:</b> {join_status}
+💬 <b>Owner Link:</b> {owner_status}
 
-<i>💡 Admin = Normal | Forward = Forward Tag</i>
-<i>💎 Premium Emojis Loaded!</i>"""
+<i>💡 Admin = Normal | Forward = Forward Tag</i>"""
         markup = types.InlineKeyboardMarkup(row_width=2)
         markup.add(
             colored_btn("START ✅", callback="join_on", color="success"),
@@ -338,12 +347,65 @@ def start(message: types.Message):
         send(message.chat.id, f"HELLO {user_name} 🌹")
         sent = send_welcome_contents(message.chat.id, user.first_name, "Channel")
         if not sent:
-            send(message.chat.id, "")
+            send(message.chat.id, "Welcome!")
 
+# ═══════════════════════════════════════
+# ⚙️ ADMIN COMMANDS
+# ═══════════════════════════════════════
+@bot.message_handler(commands=['setowner'])
+def set_owner_cmd(message: types.Message):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        parts = message.text.split(maxsplit=1)
+        if len(parts) < 2:
+            send(message.chat.id, "❌ Format: <code>/setowner @Username</code>")
+            return
+        username = parts[1].replace("@", "").strip()
+        data["owner_username"] = username
+        save_data(data)
+        send(message.chat.id, f"✅ Owner Username Set: <b>@{username}</b>\n\nAb sabhi welcome contents me 'Message Owner' button aayega!")
+    except Exception as e:
+        send(message.chat.id, f"❌ Error: {e}")
+
+@bot.message_handler(commands=['setmsg'])
+def set_msg_cmd(message: types.Message):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        parts = message.text.split(maxsplit=1)
+        if len(parts) < 2:
+            send(message.chat.id, "❌ Format: <code>/setmsg Hello I am joined your channel</code>")
+            return
+        msg = parts[1].strip()
+        data["owner_draft_msg"] = msg
+        save_data(data)
+        send(message.chat.id, f"✅ Draft Message Set:\n\n<i>{html.escape(msg)}</i>\n\nYeh message user ke type box me pre-filled hoga.")
+    except Exception as e:
+        send(message.chat.id, f"❌ Error: {e}")
+
+@bot.message_handler(commands=['setbtntext'])
+def set_btn_text_cmd(message: types.Message):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        parts = message.text.split(maxsplit=1)
+        if len(parts) < 2:
+            send(message.chat.id, f"❌ Format: <code>/setbtntext 💬 Message Owner</code>\nCurrent: {data.get('owner_btn_text')}")
+            return
+        btn_text = parts[1].strip()
+        data["owner_btn_text"] = btn_text
+        save_data(data)
+        send(message.chat.id, f"✅ Button Text Set: <b>{html.escape(btn_text)}</b>")
+    except Exception as e:
+        send(message.chat.id, f"❌ Error: {e}")
+
+# ═══════════════════════════════════════
+# 📝 WELCOME & MENUS
+# ═══════════════════════════════════════
 @bot.message_handler(commands=['pin'])
 def pin_cmd(message: types.Message):
     if not is_admin(message.from_user.id):
-        send(message.chat.id, "❌ Admin only!")
         return
     contents = data.get("welcome_contents", [])
     if not contents:
@@ -360,7 +422,6 @@ def pin_cmd(message: types.Message):
 @bot.message_handler(commands=['unpin'])
 def unpin_cmd(message: types.Message):
     if not is_admin(message.from_user.id):
-        send(message.chat.id, "❌ Admin only!")
         return
     data["pinned_content"] = None
     save_data(data)
@@ -373,7 +434,9 @@ def welcome_cmd(message: types.Message):
         return
     contents = data.get("welcome_contents", [])
     pinned = data.get("pinned_content")
-    text = f"🎨 <b>WELCOME BUILDER</b>\n\n📝 Contents: {len(contents)}\n"
+    owner_user = data.get('owner_username') or "Not Set"
+    
+    text = f"🎨 <b>WELCOME BUILDER</b>\n\n📝 Contents: {len(contents)}\n💬 Owner: @{owner_user}\n"
     if pinned is not None:
         text += f"📌 <b>PINNED:</b> #{pinned+1}\n"
     text += "\n"
@@ -382,14 +445,13 @@ def welcome_cmd(message: types.Message):
         for i, item in enumerate(contents, 1):
             t = item["type"]
             prev = item["content"][:30] if t == "text" else item.get("filename", t.upper())
-            link_mark = " 🔗" if item.get("owner_link") else ""
-            text += f"  {i}. {'📝' if t=='text' else '📁'} {prev} [{len(item.get('buttons',[]))}🔘]{link_mark} {'📌' if pinned==i-1 else ''}\n"
+            text += f"  {i}. {'📝' if t=='text' else '📁'} {prev} [{len(item.get('buttons',[]))}🔘] {'📌' if pinned==i-1 else ''}\n"
+            
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(colored_btn("Add Text", callback="add_text", color="primary"), colored_btn("Add File", callback="add_file", color="success"))
-    markup.add(colored_btn("Add Button", callback="btn_add", color="danger"), colored_btn("Set Owner Link", callback="owner_link_menu", color="success"))
-    markup.add(colored_btn("Pin Content", callback="pin_menu", color="primary"), colored_btn("Edit", callback="edit_menu", color="danger"))
-    markup.add(colored_btn("Delete", callback="delete_menu", color="danger"), colored_btn("Preview", callback="preview", color="success"))
-    markup.add(colored_btn("Clear All", callback="clear", color="danger"))
+    markup.add(colored_btn("Add Button", callback="btn_add", color="danger"), colored_btn("Pin Content", callback="pin_menu", color="primary"))
+    markup.add(colored_btn("Edit", callback="edit_menu", color="danger"), colored_btn("Delete", callback="delete_menu", color="danger"))
+    markup.add(colored_btn("Preview", callback="preview", color="success"), colored_btn("Clear All", callback="clear", color="danger"))
     send_html(message.chat.id, text, reply_markup=markup)
 
 @bot.message_handler(commands=['stats'])
@@ -397,17 +459,20 @@ def stats_cmd(message: types.Message):
     ch = data.get("stats", {}).get("channels", {})
     pinned = data.get("pinned_content")
     join_status = "🟢 ON" if data.get("join_enabled", True) else "🔴 OFF"
-    link_count = sum(1 for i in data.get("welcome_contents", []) if i.get("owner_link"))
-    text = f"📊 <b>STATS</b>\n\n✅ Approved: {data['stats']['approved']}\n📢 Channels: {len(ch)}\n📝 Contents: {len(data.get('welcome_contents',[]))}\n🔗 Owner Links: {link_count}\n👥 Users: {len(data.get('users',[]))}\n💎 Emojis: {len(PREMIUM_EMOJI_MAP)}\n📥 Join: {join_status}"
+    owner_user = data.get('owner_username') or "Not Set"
+    text = f"📊 <b>STATS</b>\n\n✅ Approved: {data['stats']['approved']}\n📢 Channels: {len(ch)}\n📝 Contents: {len(data.get('welcome_contents',[]))}\n👥 Users: {len(data.get('users',[]))}\n💬 Owner: @{owner_user}\n📥 Join: {join_status}"
     if pinned is not None:
         text += f"\n📌 Pinned: #{pinned+1}"
     send_html(message.chat.id, text)
 
 @bot.message_handler(commands=['help'])
 def help_cmd(message: types.Message):
-    text = "📋 <b>COMMANDS ✅</b>\n\n/welcome | /stats | /pin | /unpin | /help\n\n📥 <b>START/OFF</b> buttons se join on/off\n\n🔗 <b>Set Owner Link:</b>\nContent number → link paste\nDM button auto add hoga\n\n💡 <b>Button Format:</b>\n<code>Content No.\nText ✅ | URL/blue/row:1</code>"
+    text = "📋 <b>COMMANDS ✅</b>\n\n/welcome - Content builder\n/stats - Statistics\n/pin - Pin content\n/unpin - Remove pin\n\n⚙️ <b>Owner Settings:</b>\n<code>/setowner @Username</code>\n<code>/setmsg Your Message</code>\n<code>/setbtntext 💬 Message Owner</code>"
     send_html(message.chat.id, text)
 
+# ═══════════════════════════════════════
+# 🎛️ CALLBACKS
+# ═══════════════════════════════════════
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call: types.CallbackQuery):
     uid = call.from_user.id
@@ -449,7 +514,7 @@ def handle_callbacks(call: types.CallbackQuery):
         send_html(call.message.chat.id, "📝 Welcome text ✅\n\nUse {name} | {channel} | \"text\" for quotes\n\n/cancel")
     elif cmd == "add_file":
         user_states[uid] = "adding_file"
-        send_html(call.message.chat.id, "📁 File bhejo 📁\n\nCaption likho - ✅😂🔥⭐ sab auto premium!\n\n/cancel")
+        send_html(call.message.chat.id, "📁 File bhejo 📁\n\nCaption likho - ✅🔥💎👑🚀🌹💬📥📢 sab auto premium!\n\n/cancel")
     elif cmd == "btn_add":
         if not contents:
             send(call.message.chat.id, "⚠️ Pehle text add!")
@@ -460,18 +525,6 @@ def handle_callbacks(call: types.CallbackQuery):
             prev = item.get("content", item.get("filename", ""))[:30] if item["type"] == "text" else item.get("filename", item["type"].upper())
             t += f"<b>Content {i}:</b> {'📝' if item['type']=='text' else '📁'} {prev}\n"
         t += "\n<b>Format:</b>\n<code>Content Number\nButton1 ✅ | URL/blue/row:1\nButton2 🚀 | URL/green/row:1</code>\n\n/cancel"
-        send_html(call.message.chat.id, t)
-    elif cmd == "owner_link_menu":
-        if not contents:
-            send(call.message.chat.id, "⚠️ Pehle content add!")
-            return
-        t = "🔗 <b>SET OWNER DM LINK</b>\n\nKis content me add karna hai?\n\n"
-        for i, item in enumerate(contents, 1):
-            prev = item.get("content", item.get("filename", ""))[:30] if item["type"] == "text" else item.get("filename", item["type"].upper())
-            has = " 🔗 linked" if item.get("owner_link") else ""
-            t += f"<b>{i}.</b> {'📝' if item['type']=='text' else '📁'} {prev}{has}\n"
-        t += "\n<b>Reply format:</b>\n<code>ContentNumber\nLink\n[Optional Button Text]</code>\n\nExample:\n<code>1\nhttps://t.me/m/j7A9nBg6N2Y1\n💬 DM Owner</code>\n\nType /skip to remove link\n\n/cancel"
-        user_states[uid] = "owner_link_input"
         send_html(call.message.chat.id, t)
     elif cmd == "edit_menu":
         if not contents:
@@ -499,9 +552,7 @@ def handle_callbacks(call: types.CallbackQuery):
             return
         t = "👁️ <b>PREVIEW</b>\n\n"
         for i, item in enumerate(contents, 1):
-            link = item.get("owner_link")
-            link_info = f" 🔗 {link}" if link else ""
-            t += f"{i}. {'📝' if item['type']=='text' else '📁'} {item.get('content',item.get('filename',''))[:50]}{link_info}\n"
+            t += f"{i}. {'📝' if item['type']=='text' else '📁'} {item.get('content',item.get('filename',''))[:50]}\n"
         send_html(call.message.chat.id, t)
     elif cmd == "clear":
         data["welcome_contents"] = []
@@ -509,6 +560,9 @@ def handle_callbacks(call: types.CallbackQuery):
         save_data(data)
         send(call.message.chat.id, "✅ Cleared!")
 
+# ═══════════════════════════════════════
+# 📥 FILE UPLOAD
+# ═══════════════════════════════════════
 @bot.message_handler(content_types=['video', 'photo', 'document', 'voice', 'audio'], func=lambda m: is_admin(m.from_user.id) and user_states.get(m.from_user.id) == "adding_file")
 def handle_file_upload(message: types.Message):
     uid = message.from_user.id
@@ -554,7 +608,10 @@ def handle_file_upload(message: types.Message):
         user_states.pop(uid, None)
         send(message.chat.id, "❌ Failed!")
 
-@bot.message_handler(func=lambda m: is_admin(m.from_user.id) and (user_states.get(m.from_user.id) in ["adding_text", "adding_button", "edit_select", "delete_select", "pin_select", "owner_link_input"] or user_states.get(m.from_user.id, "").startswith("edit_save_")))
+# ═══════════════════════════════════════
+# 🔄 STATE HANDLER
+# ═══════════════════════════════════════
+@bot.message_handler(func=lambda m: is_admin(m.from_user.id) and (user_states.get(m.from_user.id) in ["adding_text", "adding_button", "edit_select", "delete_select", "pin_select"] or user_states.get(m.from_user.id, "").startswith("edit_save_")))
 def handle_states(message: types.Message):
     uid = message.from_user.id
     state = user_states.get(uid, "")
@@ -639,66 +696,6 @@ def handle_states(message: types.Message):
             send(message.chat.id, "❌ Koi button add nahi hua!\n\n/cancel")
         user_states.pop(uid, None)
 
-    elif state == "owner_link_input":
-        raw = message.text.strip()
-
-        if raw.lower() == "/skip":
-            user_states[uid] = "owner_link_pick_skip"
-            contents = data.get("welcome_contents", [])
-            t = "🔗 <b>REMOVE OWNER LINK</b>\n\nKaunsa content?\n\n"
-            for i, item in enumerate(contents, 1):
-                has = " 🔗" if item.get("owner_link") else ""
-                prev = item.get("content", item.get("filename", ""))[:30] if item["type"] == "text" else item.get("filename", item["type"].upper())
-                t += f"{i}. {prev}{has}\n"
-            t += "\nNumber:"
-            send_html(message.chat.id, t)
-            return
-
-        lines = [l for l in raw.split('\n') if l.strip() != ""]
-        if len(lines) < 2:
-            send(message.chat.id, "❌ Format:\n<code>ContentNumber\nLink\n[Button Text]</code>\n\n/cancel")
-            return
-
-        try:
-            idx = int(lines[0].strip()) - 1
-        except:
-            send(message.chat.id, "❌ Pehli line Content Number honi chahiye!\n\n/cancel")
-            return
-
-        contents = data.get("welcome_contents", [])
-        if idx < 0 or idx >= len(contents):
-            send(message.chat.id, "❌ Invalid Content Number!\n\n/cancel")
-            user_states.pop(uid, None)
-            return
-
-        link = lines[1].strip()
-        if not (link.startswith("http://") or link.startswith("https://") or link.startswith("tg://")):
-            send(message.chat.id, "❌ Link http://, https:// ya tg:// se start hona chahiye!\n\nRetry ya /cancel")
-            return
-
-        btn_text = lines[2].strip() if len(lines) >= 3 else DEFAULT_OWNER_BTN_TEXT
-
-        contents[idx]["owner_link"] = link
-        contents[idx]["owner_btn_text"] = btn_text
-        save_data(data)
-        user_states.pop(uid, None)
-        send(message.chat.id, f"✅ Owner link set on Content {idx+1}!\nLink: {html.escape(link)}\nButton: {html.escape(btn_text)}\n\n/welcome")
-
-    elif state == "owner_link_pick_skip":
-        try:
-            idx = int(message.text.strip()) - 1
-            contents = data.get("welcome_contents", [])
-            if 0 <= idx < len(contents):
-                contents[idx].pop("owner_link", None)
-                contents[idx].pop("owner_btn_text", None)
-                save_data(data)
-                send(message.chat.id, f"✅ Owner link removed from Content {idx+1}!")
-            else:
-                send(message.chat.id, "❌ Invalid!")
-        except:
-            send(message.chat.id, "❌ Number!")
-        user_states.pop(uid, None)
-
     elif state == "edit_select":
         contents = data.get("welcome_contents", [])
         try:
@@ -723,9 +720,6 @@ def handle_states(message: types.Message):
                 except:
                     pass
             new_item = {"type": "text", "content": message.text, "buttons": old.get("buttons", [])}
-            if old.get("owner_link"):
-                new_item["owner_link"] = old["owner_link"]
-                new_item["owner_btn_text"] = old.get("owner_btn_text", DEFAULT_OWNER_BTN_TEXT)
             contents[idx] = new_item
             save_data(data)
         user_states.pop(uid, None)
@@ -754,6 +748,9 @@ def handle_states(message: types.Message):
             pass
         user_states.pop(uid, None)
 
+# ═══════════════════════════════════════
+# 📨 USER TO ADMIN & BROADCAST
+# ═══════════════════════════════════════
 @bot.message_handler(content_types=['text', 'photo', 'video', 'document', 'voice', 'audio', 'sticker', 'animation'], func=lambda m: not is_admin(m.from_user.id))
 def user_to_admin(message: types.Message):
     user = message.from_user
@@ -830,6 +827,9 @@ def admin_broadcast(message: types.Message):
         report += f"\n🚫 Blocked (removed): {len(blocked_users)}"
     send_html(message.chat.id, report)
 
+# ═══════════════════════════════════════
+# 🌐 FLASK SERVER
+# ═══════════════════════════════════════
 app = Flask(__name__)
 
 @app.route('/')
