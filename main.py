@@ -1,214 +1,140 @@
 import os
-import re
 import asyncio
-import logging
-import sqlite3
-import threading
-from flask import Flask, request
-
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.constants import ChatAction
+from aiohttp import web
+from telegram import Update
 from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler,
-    ConversationHandler, MessageHandler, ContextTypes, filters
+    ApplicationBuilder,
+    ChatJoinRequestHandler,
+    CommandHandler,
+    ContextTypes,
 )
-from telethon import TelegramClient, events
-from telethon.sessions import StringSession
-from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
 
-# ================= CONFIGURATION =================
+# Testing Bot Token
 BOT_TOKEN = "9065028572:AAE2ta4QkUt7xbAADfzWeX8XQh2B_lbPf1o"
-OWNER_ID = 8498419947
-API_ID = 37344308
-API_HASH = "9d7572be2c44f726721ab4d1ba2e2bcd"
-# =================================================
 
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Render / Local port
+PORT = int(os.getenv("PORT", "10000"))
 
-app = Flask(__name__)
-bot_app = Application.builder().token(BOT_TOKEN).build()
+# Apni Telegram User ID yahan daalein (jaise 123456789) taaki /setmsg kaam kare
+ADMIN_USER_IDS = {
+    int(uid.strip())
+    for uid in os.getenv("ADMIN_USER_IDS", "").split(",")
+    if uid.strip().isdigit()
+}
 
-WAITING_PHONE, WAITING_OTP, WAITING_2FA = range(3)
-temp_login = {}
+# Default welcome message (runtime me /setmsg se badal sakte hain)
+WELCOME_MESSAGE = os.getenv(
+    "WELCOME_MESSAGE",
+    "Thanks for joining {first_name}! 🎉"
+)
 
-# ================= DATABASE =================
-def init_db():
-    conn = sqlite3.connect("accounts.db", timeout=30)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("""CREATE TABLE IF NOT EXISTS accounts (
-        phone TEXT UNIQUE, name TEXT, user_id INTEGER, session_string TEXT, is_active INTEGER)""")
-    conn.commit()
-    conn.close()
+# Request auto-approve karna ho to "true" karein
+AUTO_APPROVE = os.getenv("AUTO_APPROVE", "false").lower() == "true"
 
-def save_account(phone, name, user_id, session_string):
-    conn = sqlite3.connect("accounts.db", timeout=30)
-    conn.execute("""INSERT INTO accounts (phone, name, user_id, session_string, is_active) 
-                 VALUES (?, ?, ?, ?, 1) ON CONFLICT(phone) DO UPDATE SET session_string=excluded.session_string""", 
-                 (phone, name, user_id, session_string))
-    conn.commit()
-    conn.close()
 
-init_db()
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_USER_IDS
 
-# ================= MENU =================
-def main_menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Add Account", callback_data="add_acc")],
-        [InlineKeyboardButton("❓ Help", callback_data="help")]
-    ])
 
-async def send_typing(context, chat_id):
-    try: await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-    except: pass
+async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message:
+        await update.message.reply_text(
+            "बॉट चालू है! चैनल की join request आने पर कस्टम मैसेज भेजेगा।"
+        )
 
-# ================= HANDLERS =================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    await send_typing(context, update.effective_chat.id)
-    await update.message.reply_text("👋 *Welcome to OTP Bot Manager!*\n\nYahan se apna account login karein.", parse_mode="Markdown", reply_markup=main_menu())
 
-async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if query.data == "help":
-        await query.edit_message_text("1. Add Account par click karein.\n2. Apna number daalein.\n3. OTP daalein.\nBas account login ho jayega!", reply_markup=main_menu())
+async def set_msg_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global WELCOME_MESSAGE
+    user = update.effective_user
+    if not user or not is_admin(user.id):
+        if update.message:
+            await update.message.reply_text("❌ सिर्फ़ Admin ही मैसेज बदल सकता है।")
+        return
 
-async def start_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    await query.edit_message_text("📱 *Apna Phone Number daalein (Country code ke saath):*\nExample: `+919876543210`\n\nCancel karne ke liye /cancel likhein.", parse_mode="Markdown")
-    return WAITING_PHONE
+    new_msg = " ".join(context.args).strip()
+    if not new_msg:
+        if update.message:
+            await update.message.reply_text(
+                "इस्तेमाल: `/setmsg Thanks for joining {first_name}!`"
+            )
+        return
 
-async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    phone = update.message.text.strip()
-    user_id = update.effective_user.id
-    await update.message.delete()
-    
-    if not re.match(r"^\+\d{10,15}$", phone):
-        await context.bot.send_message(update.effective_chat.id, "❌ Format galat hai. Dubara daalein (jaise +91...):")
-        return WAITING_PHONE
+    WELCOME_MESSAGE = new_msg
+    if update.message:
+        await update.message.reply_text(f"✅ नया मैसेज सेट हो गया:\n\n{WELCOME_MESSAGE}")
 
-    msg = await context.bot.send_message(update.effective_chat.id, f"⏳ `{phone}` par OTP bheja ja raha hai...", parse_mode="Markdown")
-    
-    client = TelegramClient(StringSession(), API_ID, API_HASH)
-    await client.connect()
+
+async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    req = update.chat_join_request
+    if not req:
+        return
+
+    user = req.from_user
+    chat = req.chat
+
     try:
-        sent = await client.send_code_request(phone)
-        temp_login[user_id] = {"phone": phone, "hash": sent.phone_code_hash, "client": client, "msg_id": msg.message_id}
-        await msg.edit_text("📩 *OTP aapke Telegram par aaya hai. Yahan daalein:*", parse_mode="Markdown")
-        return WAITING_OTP
-    except Exception as e:
-        await msg.edit_text(f"❌ Error: {e}")
-        return ConversationHandler.END
+        msg = WELCOME_MESSAGE.format(
+            name=user.full_name or "User",
+            first_name=user.first_name or "User",
+            channel=chat.title or "Channel",
+        )
+    except Exception:
+        msg = WELCOME_MESSAGE
 
-async def get_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    otp = update.message.text.strip()
-    user_id = update.effective_user.id
-    await update.message.delete()
-    
-    data = temp_login.get(user_id)
-    if not data:
-        await context.bot.send_message(update.effective_chat.id, "❌ Session expire ho gaya. /start karein.")
-        return ConversationHandler.END
-
-    msg = await context.bot.send_message(update.effective_chat.id, "⏳ OTP Verify ho raha hai...")
-    client = data["client"]
-    
     try:
-        await client.sign_in(data["phone"], otp, phone_code_hash=data["hash"])
-        me = await client.get_me()
-        session_str = client.session.save()
-        
-        save_account(data["phone"], me.first_name, me.id, session_str)
-        await client.disconnect()
-        
-        await msg.edit_text(f"✅ *Login Successful!*\nName: {me.first_name}\nNumber: {data['phone']}\n\nAb aapka account bot ke saath connect ho gaya hai.", parse_mode="Markdown", reply_markup=main_menu())
-        del temp_login[user_id]
-        return ConversationHandler.END
-    except SessionPasswordNeededError:
-        await msg.edit_text("🔐 *2FA Password daalein:*", parse_mode="Markdown")
-        return WAITING_2FA
-    except PhoneCodeInvalidError:
-        await msg.edit_text("❌ OTP galat hai. Dubara daalein:")
-        return WAITING_OTP
+        await context.bot.send_message(chat_id=user.id, text=msg)
+        print(f"[DM SENT] User: {user.id} ({user.full_name}) | Chat: {chat.title}")
     except Exception as e:
-        await msg.edit_text(f"❌ Error: {e}")
-        return ConversationHandler.END
+        print(f"[DM FAILED] User: {user.id} | Error: {e}")
 
-async def get_2fa(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    pwd = update.message.text.strip()
-    user_id = update.effective_user.id
-    await update.message.delete()
-    
-    data = temp_login.get(user_id)
-    if not data: return ConversationHandler.END
+    if AUTO_APPROVE:
+        try:
+            await req.approve()
+            print(f"[APPROVED] User: {user.id} in {chat.title}")
+        except Exception as e:
+            print(f"[APPROVE FAILED] User: {user.id} | Error: {e}")
 
-    msg = await context.bot.send_message(update.effective_chat.id, "⏳ 2FA Verify ho raha hai...")
-    client = data["client"]
+
+# --- Render / Health Server ---
+async def health_handler(request: web.Request) -> web.Response:
+    return web.Response(text="Bot is running!")
+
+
+async def start_web_server():
+    app_web = web.Application()
+    app_web.router.add_get("/", health_handler)
+    app_web.router.add_get("/health", health_handler)
+
+    runner = web.AppRunner(app_web)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    print(f"[WEB] Listening on port {PORT}")
+
+
+async def main():
+    await start_web_server()
+
+    tg_app = ApplicationBuilder().token(BOT_TOKEN).build()
+    tg_app.add_handler(CommandHandler("start", start_cmd))
+    tg_app.add_handler(CommandHandler("setmsg", set_msg_cmd))
+    tg_app.add_handler(ChatJoinRequestHandler(handle_join_request))
+
+    await tg_app.initialize()
+    await tg_app.start()
+    await tg_app.updater.start_polling(
+        allowed_updates=["message", "chat_join_request"]
+    )
+    print("[BOT] Polling started...")
+
     try:
-        await client.sign_in(password=pwd)
-        me = await client.get_me()
-        session_str = client.session.save()
-        
-        save_account(data["phone"], me.first_name, me.id, session_str)
-        await client.disconnect()
-        
-        await msg.edit_text(f"✅ *Login Successful (2FA)!*\nName: {me.first_name}\nNumber: {data['phone']}", parse_mode="Markdown", reply_markup=main_menu())
-        del temp_login[user_id]
-        return ConversationHandler.END
-    except Exception as e:
-        await msg.edit_text(f"❌ 2FA Error: {e}")
-        return ConversationHandler.END
+        while True:
+            await asyncio.sleep(3600)
+    finally:
+        await tg_app.updater.stop()
+        await tg_app.stop()
+        await tg_app.shutdown()
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Cancel ho gaya.", reply_markup=main_menu())
-    return ConversationHandler.END
-
-bot_app.add_handler(CommandHandler("start", start))
-bot_app.add_handler(CallbackQueryHandler(menu_callback, pattern="^help$"))
-bot_app.add_handler(ConversationHandler(
-    entry_points=[CallbackQueryHandler(start_add, pattern="^add_acc$")],
-    states={
-        WAITING_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_phone)],
-        WAITING_OTP: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_otp)],
-        WAITING_2FA: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_2fa)],
-    },
-    fallbacks=[CommandHandler("cancel", cancel)]
-))
-
-# ================= FLASK =================
-@app.route(f"/{BOT_TOKEN}", methods=["POST"])
-def telegram_webhook():
-    update = Update.de_json(request.get_json(force=True), bot_app.bot)
-    asyncio.run_coroutine_threadsafe(bot_app.update_queue.put(update), bot_app.loop)
-    return "OK", 200
-
-@app.route("/")
-def index():
-    return "Bot is running perfectly!", 200
-
-# ================= STARTUP =================
-async def start_bot():
-    await bot_app.initialize()
-    await bot_app.start()
-    
-    # Render URL automatically pick karega
-    render_url = os.environ.get("RENDER_EXTERNAL_URL")
-    if render_url:
-        webhook_url = f"{render_url}/{BOT_TOKEN}"
-        await bot_app.bot.set_webhook(webhook_url)
-        logger.info(f"✅ Webhook set to: {webhook_url}")
-    else:
-        logger.warning("⚠️ RENDER_EXTERNAL_URL not found!")
-
-def run_bot_thread():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    bot_app.loop = loop
-    loop.run_until_complete(start_bot())
-    loop.run_forever()
 
 if __name__ == "__main__":
-    threading.Thread(target=run_bot_thread, daemon=True).start()
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    asyncio.run(main())
