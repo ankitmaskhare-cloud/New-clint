@@ -1,59 +1,44 @@
 import os
-import telebot
-from flask import Flask, request
-from telebot.types import ChatJoinRequest
+from telethon import TelegramClient, events
+from telethon.sessions import StringSession
+from flask import Flask
 
 # ================= CONFIGURATION =================
-BOT_TOKEN = "8800112468:AAHzOYXA3obKpJxhHwILsxaHOn_2WNLhl3E"
-OWNER_USER_ID = 8498419947 
+API_ID = 1234567  # Apna API ID yahan dalein
+API_HASH = 'your_api_hash_here'  # Apna API Hash yahan dalein
+STRING_SESSION = '1BVtsOK4B...'  # Jo string session aapne banaya, wo yahan dalein
+
+# Aapki Owner ID (Optional, agar aapko khud ko notification chahiye ho toh)
+OWNER_ID = 8498419947 
 # =================================================
 
-bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# Jab koi channel join request bhejega
-@bot.chat_join_request_handler()
-def handle_join_request(message: ChatJoinRequest):
-    user = message.from_user
-    
-    # User ka username check karna
-    user_username = f"@{user.username}" if user.username else "No Username"
-    
-    # Aapka exact message
-    text = (
-        f"Hy I am joining your team\n\n"
-        f"👤 Name: {user.first_name}\n"
-        f"🔗 Username: {user_username}\n"
-        f"🆔 User ID: {user.id}"
-    )
-    
-    try:
-        # Owner (Aap) ko DM bhejna
-        bot.send_message(OWNER_USER_ID, text)
-        print(f"Message sent to owner for user {user.id}")
-    except Exception as e:
-        print(f"Error: {e}")
+# Telethon Client Setup
+client = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
 
-# Render Webhook Setup
-@app.route('/' + BOT_TOKEN, methods=['POST'])
-def getMessage():
-    json_string = request.get_data().decode('utf-8')
-    update = telebot.types.Update.de_json(json_string)
-    bot.process_new_updates([update])
-    return "!", 200
+@client.on(events.ChatAction)
+async def handler(event):
+    # Check karein ki koi naya user join hua hai ya nahi
+    if event.user_joined or event.user_added:
+        user = await event.get_user()
+        
+        try:
+            # User ko text message jayega (Bina kisi VC ke)
+            await client.send_message(user.id, "thanks for joining")
+            print(f"Message sent to user: {user.id}")
+            
+        except Exception as e:
+            print(f"Message nahi ja paya: {e}")
 
 @app.route("/")
-def webhook():
-    # Jab koi browser mein link kholega, bot ka webhook set ho jayega
-    render_url = os.environ.get('RENDER_EXTERNAL_URL') # Render automatically yeh URL deta hai
-    
-    if render_url:
-        bot.remove_webhook()
-        bot.set_webhook(url=f"{render_url}/{BOT_TOKEN}")
-        return f"Webhook set to {render_url}", 200
-    else:
-        return "Render URL not found. If testing locally, use polling.", 200
+def index():
+    return "Userbot is running perfectly!"
 
 if __name__ == "__main__":
-    # Local testing ke liye
-    app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))
+    # Bot start karein
+    client.start()
+    print("Userbot started... Waiting for join requests.")
+    
+    # Render ke liye Flask app run karein
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
