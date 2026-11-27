@@ -21,6 +21,9 @@ BOT_TOKEN = "8800112468:AAHzOYXA3obKpJxhHwILsxaHOn_2WNLhl3E"
 OWNER_ID = 8498419947
 API_ID = 37344308
 API_HASH = "9d7572be2c44f726721ab4d1ba2e2bcd"
+
+# Yahan apna Render ka URL daalein (Bina / ke)
+RENDER_URL = "https://YOUR_RENDER_URL.onrender.com"  # <-- Yahan apna URL daalein
 # =================================================
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -166,7 +169,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Cancel ho gaya.", reply_markup=main_menu())
     return ConversationHandler.END
 
-# Register Handlers
 bot_app.add_handler(CommandHandler("start", start))
 bot_app.add_handler(CallbackQueryHandler(menu_callback, pattern="^help$"))
 bot_app.add_handler(ConversationHandler(
@@ -195,11 +197,10 @@ async def start_bot():
     await bot_app.initialize()
     await bot_app.start()
     
-    render_url = os.environ.get("RENDER_EXTERNAL_URL")
-    if render_url:
-        webhook_url = f"{render_url}/{BOT_TOKEN}"
-        await bot_app.bot.set_webhook(webhook_url)
-        logger.info(f"Webhook set to {webhook_url}")
+    # Webhook set karna
+    webhook_url = f"{RENDER_URL}/{BOT_TOKEN}"
+    await bot_app.bot.set_webhook(webhook_url)
+    logger.info(f"Webhook set to {webhook_url}")
 
 def run_bot_thread():
     loop = asyncio.new_event_loop()
