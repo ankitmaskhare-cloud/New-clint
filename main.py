@@ -5,6 +5,7 @@ import re
 import random
 import threading
 import html
+import urllib.parse
 from flask import Flask
 from telebot import TeleBot, types
 from telebot.types import MessageEntity
@@ -17,7 +18,7 @@ ADMIN_IDS = [8498419947, 6862525056]
 
 DATA_FILE = os.path.join(os.getcwd(), "data.json")
 
-# 💎 ONLY 10 CUSTOM EMOJIS (as requested)
+# 💎 ONLY 10 CUSTOM EMOJIS
 PREMIUM_EMOJI_MAP = {
     "✅": ["6113743365826677162"],
     "🔥": ["6332589971240655050"],
@@ -55,10 +56,8 @@ DEFAULT_DATA = {
     "stats": {"approved": 0, "channels": {}},
     "pinned_content": None,
     "join_enabled": True,
-    # NEW GLOBAL OWNER SETTINGS
     "owner_username": "", 
-    "owner_draft_msg": "Hello I am joined your channel",
-    "owner_btn_text": "💬 Message Owner"
+    "owner_draft_msg": "Hello I am joined your channel"
 }
 
 def load_data():
@@ -172,7 +171,7 @@ def send_media_with_caption(func, chat_id, file_id, caption="", reply_markup=Non
     return func(chat_id, file_id, reply_markup=reply_markup, **kwargs)
 
 # ═══════════════════════════════════════
-# ⌨️ KEYBOARD BUILDER
+# ⌨️ KEYBOARD BUILDER (Sirf custom buttons ke liye ab)
 # ═══════════════════════════════════════
 def build_full_keyboard(item):
     markup = types.InlineKeyboardMarkup(row_width=2)
@@ -190,21 +189,6 @@ def build_full_keyboard(item):
             markup.add(row_btns[0])
         else:
             markup.add(*row_btns)
-
-    # 🌟 GLOBAL OWNER LINK BUTTON (AUTO ADDED TO ALL CONTENTS)
-    owner_user = data.get("owner_username", "").replace("@", "").strip()
-    if owner_user:
-        # Format link to pre-fill draft message
-        import urllib.parse
-        draft_msg = data.get("owner_draft_msg", "Hello I am joined your channel")
-        encoded_msg = urllib.parse.quote(draft_msg)
-        owner_link = f"https://t.me/{owner_user}?text={encoded_msg}"
-        
-        btn_text = data.get("owner_btn_text", "💬 Message Owner")
-        clean_text, icon_id = extract_button_icon(btn_text)
-        
-        # Add as last row
-        markup.add(colored_btn(clean_text, url=owner_link, color="success", icon_emoji_id=icon_id))
 
     if markup.keyboard:
         return markup
@@ -253,6 +237,19 @@ def _send_single_item(chat_id, item, user_name, channel_name, markup):
 
     return False
 
+def send_owner_dm_text_link(chat_id):
+    """Owner DM ka clickable text link bhejta hai (NO BUTTON)"""
+    owner_user = data.get("owner_username", "").replace("@", "").strip()
+    if owner_user:
+        draft_msg = data.get("owner_draft_msg", "Hello I am joined your channel")
+        encoded_msg = urllib.parse.quote(draft_msg)
+        owner_link = f"https://t.me/{owner_user}?text={encoded_msg}"
+        
+        msg_text = f"<a href='{owner_link}'>👉 Click Here to Message Owner 💬</a>"
+        send(chat_id, msg_text)
+        return True
+    return False
+
 def send_pinned_content(chat_id, user_name="User", channel_name="Channel"):
     pinned_idx = data.get("pinned_content")
     if pinned_idx is None:
@@ -279,7 +276,11 @@ def send_welcome_contents(chat_id, user_name="User", channel_name="Channel"):
                 sent = True
         except Exception as e:
             logger.error(f"Welcome: {e}")
-    return sent
+    
+    # 🌟 Yahan Owner Link ka text message jayega (Button nahi)
+    link_sent = send_owner_dm_text_link(chat_id)
+    
+    return sent or link_sent
 
 # ═══════════════════════════════════════
 # 🌐 HANDLERS
@@ -309,9 +310,7 @@ def handle_join(update: types.ChatJoinRequest):
         safe_name = html.escape(name)
         send(uid, f"HELLO {safe_name} 🌹")
 
-        sent = send_welcome_contents(uid, name, channel)
-        if not sent:
-            send(uid, "Welcome!")
+        send_welcome_contents(uid, name, channel)
     except Exception as e:
         logger.error(f"Join: {e}")
 
@@ -345,9 +344,7 @@ def start(message: types.Message):
     else:
         user_name = html.escape(user.first_name)
         send(message.chat.id, f"HELLO {user_name} 🌹")
-        sent = send_welcome_contents(message.chat.id, user.first_name, "Channel")
-        if not sent:
-            send(message.chat.id, "Welcome!")
+        send_welcome_contents(message.chat.id, user.first_name, "Channel")
 
 # ═══════════════════════════════════════
 # ⚙️ ADMIN COMMANDS
@@ -364,7 +361,7 @@ def set_owner_cmd(message: types.Message):
         username = parts[1].replace("@", "").strip()
         data["owner_username"] = username
         save_data(data)
-        send(message.chat.id, f"✅ Owner Username Set: <b>@{username}</b>\n\nAb sabhi welcome contents me 'Message Owner' button aayega!")
+        send(message.chat.id, f"✅ Owner Username Set: <b>@{username}</b>\n\nAb sabhi welcome contents ke baad Owner DM ka Link aayega!")
     except Exception as e:
         send(message.chat.id, f"❌ Error: {e}")
 
@@ -381,22 +378,6 @@ def set_msg_cmd(message: types.Message):
         data["owner_draft_msg"] = msg
         save_data(data)
         send(message.chat.id, f"✅ Draft Message Set:\n\n<i>{html.escape(msg)}</i>\n\nYeh message user ke type box me pre-filled hoga.")
-    except Exception as e:
-        send(message.chat.id, f"❌ Error: {e}")
-
-@bot.message_handler(commands=['setbtntext'])
-def set_btn_text_cmd(message: types.Message):
-    if not is_admin(message.from_user.id):
-        return
-    try:
-        parts = message.text.split(maxsplit=1)
-        if len(parts) < 2:
-            send(message.chat.id, f"❌ Format: <code>/setbtntext 💬 Message Owner</code>\nCurrent: {data.get('owner_btn_text')}")
-            return
-        btn_text = parts[1].strip()
-        data["owner_btn_text"] = btn_text
-        save_data(data)
-        send(message.chat.id, f"✅ Button Text Set: <b>{html.escape(btn_text)}</b>")
     except Exception as e:
         send(message.chat.id, f"❌ Error: {e}")
 
@@ -467,7 +448,7 @@ def stats_cmd(message: types.Message):
 
 @bot.message_handler(commands=['help'])
 def help_cmd(message: types.Message):
-    text = "📋 <b>COMMANDS ✅</b>\n\n/welcome - Content builder\n/stats - Statistics\n/pin - Pin content\n/unpin - Remove pin\n\n⚙️ <b>Owner Settings:</b>\n<code>/setowner @Username</code>\n<code>/setmsg Your Message</code>\n<code>/setbtntext 💬 Message Owner</code>"
+    text = "📋 <b>COMMANDS ✅</b>\n\n/welcome - Content builder\n/stats - Statistics\n/pin - Pin content\n/unpin - Remove pin\n\n⚙️ <b>Owner Settings:</b>\n<code>/setowner @Username</code>\n<code>/setmsg Your Message</code>"
     send_html(message.chat.id, text)
 
 # ═══════════════════════════════════════
