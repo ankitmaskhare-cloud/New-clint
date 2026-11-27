@@ -4,7 +4,6 @@ import asyncio
 import logging
 import sqlite3
 import threading
-from datetime import datetime
 from flask import Flask, request
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -18,10 +17,10 @@ from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
 
 # ================= CONFIGURATION =================
-BOT_TOKEN = "8800112468:AAHzOYXA3obKpJxhHwILsxaHOn_2WNLhl3E" # Apna Bot Token
-OWNER_ID = 8498419947  # Aapki Telegram ID
-API_ID = 37344308      # Aapka API ID
-API_HASH = "9d7572be2c44f726721ab4d1ba2e2bcd" # Aapka API Hash
+BOT_TOKEN = "8800112468:AAHzOYXA3obKpJxhHwILsxaHOn_2WNLhl3E"
+OWNER_ID = 8498419947
+API_ID = 37344308
+API_HASH = "9d7572be2c44f726721ab4d1ba2e2bcd"
 # =================================================
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -33,8 +32,6 @@ bot_app = Application.builder().token(BOT_TOKEN).build()
 # ================= MEMORY & STATE =================
 WAITING_PHONE, WAITING_OTP, WAITING_2FA = range(3)
 temp_login = {}
-active_clients = {}
-session_locks = {}
 
 # ================= DATABASE (SQLite) =================
 def init_db():
@@ -90,7 +87,7 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.delete()
     
     if not re.match(r"^\+\d{10,15}$", phone):
-        msg = await context.bot.send_message(update.effective_chat.id, "❌ Format galat hai. Dubara daalein (jaise +91...):")
+        await context.bot.send_message(update.effective_chat.id, "❌ Format galat hai. Dubara daalein (jaise +91...):")
         return WAITING_PHONE
 
     msg = await context.bot.send_message(update.effective_chat.id, f"⏳ `{phone}` par OTP bheja ja raha hai...", parse_mode="Markdown")
@@ -182,7 +179,7 @@ bot_app.add_handler(ConversationHandler(
     fallbacks=[CommandHandler("cancel", cancel)]
 ))
 
-# ================= TELEGRAM WEBHOOK (FLASK) =================
+# ================= FLASK ROUTES =================
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
 def telegram_webhook():
     update = Update.de_json(request.get_json(force=True), bot_app.bot)
@@ -198,15 +195,11 @@ async def start_bot():
     await bot_app.initialize()
     await bot_app.start()
     
-    # Set Webhook to Render URL
     render_url = os.environ.get("RENDER_EXTERNAL_URL")
     if render_url:
         webhook_url = f"{render_url}/{BOT_TOKEN}"
         await bot_app.bot.set_webhook(webhook_url)
         logger.info(f"Webhook set to {webhook_url}")
-        
-    # Start the event loop in the background
-    asyncio.create_task(bot_app.updater.start_polling()) # Fallback
 
 def run_bot_thread():
     loop = asyncio.new_event_loop()
@@ -216,7 +209,5 @@ def run_bot_thread():
     loop.run_forever()
 
 if __name__ == "__main__":
-    # Start the bot in a separate thread
     threading.Thread(target=run_bot_thread, daemon=True).start()
-    # Start Flask app
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
