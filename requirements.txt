@@ -1,5 +1,2 @@
-python-telegram-bot>=21.0
-telethon
-Flask
-python-dotenv
-gunicorn
+python-telegram-bot==21.6
+aiohttp==3.10.10
