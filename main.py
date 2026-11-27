@@ -171,7 +171,7 @@ def send_media_with_caption(func, chat_id, file_id, caption="", reply_markup=Non
     return func(chat_id, file_id, reply_markup=reply_markup, **kwargs)
 
 # ═══════════════════════════════════════
-# ⌨️ KEYBOARD BUILDER (Sirf custom buttons ke liye ab)
+# ⌨️ KEYBOARD BUILDER
 # ═══════════════════════════════════════
 def build_full_keyboard(item):
     markup = types.InlineKeyboardMarkup(row_width=2)
@@ -246,7 +246,9 @@ def send_owner_dm_text_link(chat_id):
         owner_link = f"https://t.me/{owner_user}?text={encoded_msg}"
         
         msg_text = f"<a href='{owner_link}'>👉 Click Here to Message Owner 💬</a>"
-        send(chat_id, msg_text)
+        
+        # Yahan parse_mode="HTML" add kiya hai taaki link clickable ban jaye
+        bot.send_message(chat_id, msg_text, parse_mode="HTML", disable_web_page_preview=True)
         return True
     return False
 
