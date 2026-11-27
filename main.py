@@ -17,13 +17,10 @@ from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
 
 # ================= CONFIGURATION =================
-BOT_TOKEN = "8800112468:AAHzOYXA3obKpJxhHwILsxaHOn_2WNLhl3E"
+BOT_TOKEN = "9065028572:AAE2ta4QkUt7xbAADfzWeX8XQh2B_lbPf1o"
 OWNER_ID = 8498419947
 API_ID = 37344308
 API_HASH = "9d7572be2c44f726721ab4d1ba2e2bcd"
-
-# Yahan apna Render ka URL daalein (Bina / ke)
-RENDER_URL = "https://YOUR_RENDER_URL.onrender.com"  # <-- Yahan apna URL daalein
 # =================================================
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -32,11 +29,10 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 bot_app = Application.builder().token(BOT_TOKEN).build()
 
-# ================= MEMORY & STATE =================
 WAITING_PHONE, WAITING_OTP, WAITING_2FA = range(3)
 temp_login = {}
 
-# ================= DATABASE (SQLite) =================
+# ================= DATABASE =================
 def init_db():
     conn = sqlite3.connect("accounts.db", timeout=30)
     conn.execute("PRAGMA journal_mode=WAL")
@@ -55,7 +51,7 @@ def save_account(phone, name, user_id, session_string):
 
 init_db()
 
-# ================= BOT MENU UI =================
+# ================= MENU =================
 def main_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Add Account", callback_data="add_acc")],
@@ -66,7 +62,7 @@ async def send_typing(context, chat_id):
     try: await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
     except: pass
 
-# ================= BOT HANDLERS =================
+# ================= HANDLERS =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     await send_typing(context, update.effective_chat.id)
@@ -181,7 +177,7 @@ bot_app.add_handler(ConversationHandler(
     fallbacks=[CommandHandler("cancel", cancel)]
 ))
 
-# ================= FLASK ROUTES =================
+# ================= FLASK =================
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
 def telegram_webhook():
     update = Update.de_json(request.get_json(force=True), bot_app.bot)
@@ -192,15 +188,19 @@ def telegram_webhook():
 def index():
     return "Bot is running perfectly!", 200
 
-# ================= BOT STARTUP =================
+# ================= STARTUP =================
 async def start_bot():
     await bot_app.initialize()
     await bot_app.start()
     
-    # Webhook set karna
-    webhook_url = f"{RENDER_URL}/{BOT_TOKEN}"
-    await bot_app.bot.set_webhook(webhook_url)
-    logger.info(f"Webhook set to {webhook_url}")
+    # Render URL automatically pick karega
+    render_url = os.environ.get("RENDER_EXTERNAL_URL")
+    if render_url:
+        webhook_url = f"{render_url}/{BOT_TOKEN}"
+        await bot_app.bot.set_webhook(webhook_url)
+        logger.info(f"✅ Webhook set to: {webhook_url}")
+    else:
+        logger.warning("⚠️ RENDER_EXTERNAL_URL not found!")
 
 def run_bot_thread():
     loop = asyncio.new_event_loop()
